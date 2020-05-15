@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/gob"
@@ -12,9 +11,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	. "r6mapbanbackend/includes"
 	"strconv"
 	"syscall"
+
+	. "github.com/dienakakim/r6mapbanbackend/includes"
 )
 
 const SESSIONS_FILENAME = "sessions.gob"
@@ -100,6 +100,7 @@ func generateToken() string {
 func handlerBuilder(sessionMap map[string]Session) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", http.MethodPost)
 
 		if r.Header.Get("Content-Type") != "application/json" {
 			// Invalid request -- expected json
@@ -124,18 +125,22 @@ func handlerBuilder(sessionMap map[string]Session) func(http.ResponseWriter, *ht
 			//		blueTeamName: "..."
 			// }
 			var t TeamNames
-			var b bytes.Buffer
-			b.ReadFrom(r.Body)
-			defer r.Body.Close()
-			if err := json.Unmarshal(b.Bytes(), &t); err != nil {
+			jsonDec := json.NewDecoder(r.Body)
+			jsonDec.DisallowUnknownFields()
+			if err := jsonDec.Decode(&t); err != nil {
 				log.Println("Cannot decode json")
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintln(w, "Malformed body; expected orangeTeamName and blueTeamName")
+				return
 			}
 
 			// JSON decoded -- t contains TeamNames
 			// Create session
 			hostToken := generateToken()
 			s := Session{HostToken: hostToken, OrangeTeamToken: generateToken(), BlueTeamToken: generateToken(), OrangeTeamName: t.OrangeTeamName, BlueTeamName: t.BlueTeamName, MapsChosen: []string{}}
-			sessionMap[hostToken] = s
+			sessionMap[hostToken] = s                                     // host
+			sessionMap[s.OrangeTeamToken] = Session{HostToken: hostToken} // orange team
+			sessionMap[s.BlueTeamToken] = Session{HostToken: hostToken}   // blue team
 
 			// Encode session as JSON response
 			sessionJson, err := json.Marshal(s)
@@ -143,13 +148,62 @@ func handlerBuilder(sessionMap map[string]Session) func(http.ResponseWriter, *ht
 				// Error writing response, code 500 Internal Server Error
 				w.WriteHeader(http.StatusInternalServerError)
 				fmt.Fprintln(w, "Could not create JSON formatted response")
-				break
+				return
 			}
 
 			// sessionJson is response
 			w.WriteHeader(http.StatusOK)
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(sessionJson)
+		case "8":
+			// Phase 8 (results phase), mapban done
+			// Close session
+			token := r.URL.Query().Get("token")
+			if token == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintln(w, "Malformed request -- expected token")
+				return
+			}
+
+			// Look up token in session map
+			s, found := sessionMap[token]
+			if !found {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintln(w, "Malformed request -- expected valid token")
+				return
+			}
+
+			// s found, could either be host, OT, or BT token
+			// OT or BT token
+			if s.HostToken != token {
+				// Error -- only hosts can close sessions
+				w.WriteHeader(http.StatusForbidden)
+				fmt.Fprintln(w, "Not host -- closing not allowed")
+				return
+			}
+
+			// Get chosen maps
+			mapsChosen := s.MapsChosen
+
+			// Close host, OT, and BT sessions
+			delete(sessionMap, s.OrangeTeamToken)
+			delete(sessionMap, s.BlueTeamToken)
+			delete(sessionMap, s.HostToken)
+
+			// Closing sessions successful
+			// Return maps chosen
+			result, err := json.Marshal(mapsChosen)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintln(w, "Cannot encode JSON response")
+				return
+			}
+
+			// Encoded successfully
+			w.WriteHeader(http.StatusOK)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(result)
+			return
 		default:
 			// Not implemented
 			w.WriteHeader(http.StatusNotImplemented)
