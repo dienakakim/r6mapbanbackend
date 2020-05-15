@@ -46,7 +46,7 @@ func main() {
 	// Set up exit handler
 	signals := make(chan os.Signal, 1)
 	done := make(chan bool)
-	signal.Notify(signals, syscall.SIGINT)
+	signal.Notify(signals, os.Interrupt)
 	go func() {
 		for {
 			sig := <-signals
@@ -65,8 +65,6 @@ func main() {
 				// Session map saved, can now exit
 				done <- true
 				log.Printf("Sessions marshaled")
-			default:
-				log.Printf("%v received; not handled", sig)
 			}
 		}
 	}()
@@ -88,6 +86,7 @@ func main() {
 	log.Printf("Done.")
 }
 
+// generateToken generates a 24-byte-long token for use in uniquely identifying a frontend node.
 func generateToken() string {
 	var b [18]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -125,19 +124,27 @@ func handlerBuilder(sessionMap map[string]Session) func(http.ResponseWriter, *ht
 			//		blueTeamName: "..."
 			// }
 			var t TeamNames
-			jsonDec := json.NewDecoder(r.Body)
-			jsonDec.DisallowUnknownFields()
-			if err := jsonDec.Decode(&t); err != nil {
+			b := make([]byte, r.ContentLength)
+			r.Body.Read(b)
+			if err := json.Unmarshal(b, &t); err != nil {
 				log.Println("Cannot decode json")
 				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprintln(w, "Malformed body; expected orangeTeamName and blueTeamName")
+				fmt.Fprintln(w, "Malformed JSON body")
+				return
+			}
+
+			// Check for orangeTeamName and blueTeamName
+			if t.BlueTeamName == nil || t.OrangeTeamName == nil {
+				log.Println("Team names missing")
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintln(w, "Required team names missing")
 				return
 			}
 
 			// JSON decoded -- t contains TeamNames
 			// Create session
 			hostToken := generateToken()
-			s := Session{HostToken: hostToken, OrangeTeamToken: generateToken(), BlueTeamToken: generateToken(), OrangeTeamName: t.OrangeTeamName, BlueTeamName: t.BlueTeamName, MapsChosen: []string{}}
+			s := Session{HostToken: hostToken, OrangeTeamToken: generateToken(), BlueTeamToken: generateToken(), OrangeTeamName: *t.OrangeTeamName, BlueTeamName: *t.BlueTeamName, MapsChosen: []string{}}
 			sessionMap[hostToken] = s                                     // host
 			sessionMap[s.OrangeTeamToken] = Session{HostToken: hostToken} // orange team
 			sessionMap[s.BlueTeamToken] = Session{HostToken: hostToken}   // blue team

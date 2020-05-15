@@ -1,8 +1,9 @@
 package includes
 
+// Incoming JSON document. Must be checked for below fields.
 type TeamNames struct {
-	OrangeTeamName string `json:"orangeTeamName"`
-	BlueTeamName   string `json:"blueTeamName"`
+	OrangeTeamName *string `json:"orangeTeamName"`
+	BlueTeamName   *string `json:"blueTeamName"`
 }
 
 // Session represents a mapban session.
