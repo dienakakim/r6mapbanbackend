@@ -295,6 +295,20 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 			session.MapsBanned = append(session.MapsBanned, *mapChoice.Choice)
 			w.WriteHeader(http.StatusOK)
 			return
+		case "2":
+			fallthrough
+		case "3":
+			fallthrough
+		case "4":
+			fallthrough
+		case "5":
+			fallthrough
+		case "6":
+			fallthrough
+		case "7":
+			// Not implemented
+			w.WriteHeader(http.StatusNotImplemented)
+			return
 		case "8":
 			// Phase 8 (results phase), mapban done
 			// Expects following document:
