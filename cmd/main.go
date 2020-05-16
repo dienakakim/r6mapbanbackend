@@ -271,7 +271,7 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 			// check if it is from an orange team
 			if *mapChoice.Token != session.OrangeTeamToken {
 				w.WriteHeader(http.StatusForbidden) // not orange team
-				fmt.Fprintln(w, "Not orange team")
+				fmt.Fprintln(w, "Not an orange team")
 				return
 			}
 
@@ -291,16 +291,234 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 			}
 
 			// All verified. Append to list of banned maps
-			log.Printf("Phase 1: \"%s\" banned \"%s\"", session.OrangeTeamToken, *mapChoice.Choice)
+			log.Printf("Phase 1: \"%s\" banned \"%s\"", session.OrangeTeamName, *mapChoice.Choice)
 			session.MapsBanned = append(session.MapsBanned, *mapChoice.Choice)
 			w.WriteHeader(http.StatusOK)
 			return
 		case "2":
-			fallthrough
+			// Phase 2 -- Blue Team ban
+			// Expects token from a Blue Team, and non-duplicate choice
+			// {
+			// 		token: "...",
+			//		choice: "..."
+			// }
+			var mapChoice MapChoice
+			b := make([]byte, r.ContentLength)
+			r.Body.Read(b)
+			if err := json.Unmarshal(b, &mapChoice); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintln(w, "Cannot parse JSON request body")
+				return
+			}
+
+			// Check for nil fields
+			if mapChoice.Choice == nil || mapChoice.Token == nil {
+				w.WriteHeader(http.StatusBadRequest)
+				if mapChoice.Choice == nil {
+					fmt.Fprintln(w, "Map choice missing")
+				}
+				if mapChoice.Token == nil {
+					fmt.Fprintln(w, "Token missing")
+				}
+			}
+
+			// Check if token references active session
+			session, found := sessionMap[*mapChoice.Token]
+			if !found {
+				w.WriteHeader(http.StatusInternalServerError) // server fault since sessions must be preserved
+				fmt.Fprintln(w, "Session not found")
+				return
+			}
+
+			// Session found, find host session and
+			// check if it is from a blue team
+			if *mapChoice.Token != session.BlueTeamToken {
+				w.WriteHeader(http.StatusForbidden) // not blue team
+				fmt.Fprintln(w, "Not a blue team")
+				return
+			}
+
+			// Session from blue team confirmed
+			// Check if choice is duplicate
+			if session.MapsBanned[0] == *mapChoice.Choice {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, "Map \"%s\" already banned", *mapChoice.Choice)
+				return
+			}
+
+			// Check if map banned is in host session's map pool
+			found = false
+			for _, m := range session.MapPool {
+				if m == *mapChoice.Choice {
+					found = true
+					break
+				}
+			}
+			if !found {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, "Map not found in host map pool: %s\n", *mapChoice.Choice)
+				return
+			}
+
+			// All verified. Append to list of banned maps
+			log.Printf("Phase 2: \"%s\" banned \"%s\"", session.BlueTeamName, *mapChoice.Choice)
+			session.MapsBanned = append(session.MapsBanned, *mapChoice.Choice)
+			w.WriteHeader(http.StatusOK)
+			return
 		case "3":
-			fallthrough
+			// Phase 3 -- Orange Team pick
+			// Expects token from an Orange Team, and choice not already banned
+			// {
+			// 		token: "...",
+			//		choice: "..."
+			// }
+			var mapChoice MapChoice
+			b := make([]byte, r.ContentLength)
+			r.Body.Read(b)
+			if err := json.Unmarshal(b, &mapChoice); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintln(w, "Cannot parse JSON request body")
+				return
+			}
+
+			// Check for nil fields
+			if mapChoice.Choice == nil || mapChoice.Token == nil {
+				w.WriteHeader(http.StatusBadRequest)
+				if mapChoice.Choice == nil {
+					fmt.Fprintln(w, "Map choice missing")
+				}
+				if mapChoice.Token == nil {
+					fmt.Fprintln(w, "Token missing")
+				}
+			}
+
+			// Check if token references active session
+			session, found := sessionMap[*mapChoice.Token]
+			if !found {
+				w.WriteHeader(http.StatusInternalServerError) // server fault since sessions must be preserved
+				fmt.Fprintln(w, "Session not found")
+				return
+			}
+
+			// Session found, find host session and
+			// check if it is from an orange team
+			if *mapChoice.Token != session.OrangeTeamToken {
+				w.WriteHeader(http.StatusForbidden) // not orange team
+				fmt.Fprintln(w, "Not orange team")
+				return
+			}
+
+			// Session from orange team confirmed
+			// Check if choice is duplicate (in mapsBanned)
+			duplicate := false
+			for _, m := range session.MapsBanned {
+				if m == *mapChoice.Choice {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				w.WriteHeader(http.StatusExpectationFailed) // expected non-duplicate ban choice
+				fmt.Fprintf(w, "Map \"%s\" already banned\n", *mapChoice.Choice)
+				return
+			}
+
+			// Check if map picked is in host session's map pool
+			found = false
+			for _, m := range session.MapPool {
+				if m == *mapChoice.Choice {
+					found = true
+					break
+				}
+			}
+			if !found {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, "Map not found in host map pool: %s\n", *mapChoice.Choice)
+				return
+			}
+
+			// All verified. Append to list of banned maps
+			log.Printf("Phase 1: \"%s\" banned \"%s\"", session.OrangeTeamToken, *mapChoice.Choice)
+			session.MapsBanned = append(session.MapsBanned, *mapChoice.Choice)
+			w.WriteHeader(http.StatusOK)
+			return
 		case "4":
-			fallthrough
+			// Phase 4 -- Blue Team pick
+			// Expects token from an Blue Team, and choice not already banned nor picked by OT
+			// {
+			// 		token: "...",
+			//		choice: "..."
+			// }
+			var mapChoice MapChoice
+			b := make([]byte, r.ContentLength)
+			r.Body.Read(b)
+			if err := json.Unmarshal(b, &mapChoice); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintln(w, "Cannot parse JSON request body")
+				return
+			}
+
+			// Check for nil fields
+			if mapChoice.Choice == nil || mapChoice.Token == nil {
+				w.WriteHeader(http.StatusBadRequest)
+				if mapChoice.Choice == nil {
+					fmt.Fprintln(w, "Map choice missing")
+				}
+				if mapChoice.Token == nil {
+					fmt.Fprintln(w, "Token missing")
+				}
+			}
+
+			// Check if token references active session
+			session, found := sessionMap[*mapChoice.Token]
+			if !found {
+				w.WriteHeader(http.StatusInternalServerError) // server fault since sessions must be preserved
+				fmt.Fprintln(w, "Session not found")
+				return
+			}
+
+			// Session found, find host session and
+			// check if it is from a blue team
+			if *mapChoice.Token != session.BlueTeamToken {
+				w.WriteHeader(http.StatusForbidden) // not blue team
+				fmt.Fprintln(w, "Not blue team")
+				return
+			}
+
+			// Session from blue team confirmed
+			// Check if choice is duplicate (in mapsBanned)
+			duplicate := false
+			for _, m := range session.MapsBanned {
+				if m == *mapChoice.Choice {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				w.WriteHeader(http.StatusExpectationFailed) // expected non-duplicate ban choice
+				fmt.Fprintf(w, "Map \"%s\" already banned\n", *mapChoice.Choice)
+				return
+			}
+
+			// Check if map picked is in host session's map pool
+			found = false
+			for _, m := range session.MapPool {
+				if m == *mapChoice.Choice {
+					found = true
+					break
+				}
+			}
+			if !found {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, "Map not found in host map pool: %s\n", *mapChoice.Choice)
+				return
+			}
+
+			// All verified. Append to list of banned maps
+			log.Printf("Phase 1: \"%s\" banned \"%s\"", session.OrangeTeamToken, *mapChoice.Choice)
+			session.MapsBanned = append(session.MapsBanned, *mapChoice.Choice)
+			w.WriteHeader(http.StatusOK)
+			return
 		case "5":
 			fallthrough
 		case "6":
