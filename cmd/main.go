@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/gob"
@@ -57,6 +58,8 @@ func main() {
 		if os.IsNotExist(err) {
 			// No such file found, create new session map and map pool
 			log.Printf("\"%s\" not found; created new", DATA_FILENAME)
+			sessionMap = make(map[string]Session)
+			mapPool = make(map[string]bool)
 			maps := []string{BANK, BORDER, CHALET, CLUBHOUSE, COASTLINE, CONSULATE, FAVELA, FORTRESS, HEREFORDBASE, HOUSE, KAFE, KANAL, OREGON, OUTBACK, PRESIDENTIALPLANE, SKYSCRAPER, THEMEPARK, TOWER, VILLA, YACHT}
 			for _, m := range maps {
 				mapPool[m] = true
@@ -101,7 +104,7 @@ func main() {
 				dataGobEncoder.Encode(mapPool)
 				// Data saved, can now exit
 				done <- true
-				log.Printf("Sessions marshaled")
+				log.Println("Data marshaled")
 			}
 		}
 	}()
@@ -208,10 +211,11 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 			// JSON decoded -- t contains TeamNames
 			// Create session
 			hostToken := generateToken()
-			s := Session{HostToken: hostToken, OrangeTeamToken: generateToken(), BlueTeamToken: generateToken(), OrangeTeamName: *initSession.OrangeTeamName, BlueTeamName: *initSession.BlueTeamName, MapPool: initSession.MapPool, MapsChosen: make([]string, 3), MapsBanned: make([]string, 3)}
+			s := Session{HostToken: hostToken, OrangeTeamToken: generateToken(), BlueTeamToken: generateToken(), OrangeTeamName: *initSession.OrangeTeamName, BlueTeamName: *initSession.BlueTeamName, MapPool: initSession.MapPool, MapsChosen: make([]string, 0, 3), MapsBanned: make([]string, 0, 3)}
 			sessionMap[hostToken] = s                                                                         // host
 			sessionMap[s.OrangeTeamToken] = Session{HostToken: hostToken, OrangeTeamToken: s.OrangeTeamToken} // orange team
 			sessionMap[s.BlueTeamToken] = Session{HostToken: hostToken, BlueTeamToken: s.BlueTeamToken}       // blue team
+			log.Printf("Created session \"%s\" with orange team \"%s\" and blue team \"%s\"", hostToken, s.OrangeTeamToken, s.BlueTeamToken)
 
 			// Encode session as JSON response
 			sessionJson, err := json.Marshal(s)
@@ -221,6 +225,8 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 				fmt.Fprintln(w, "Could not create JSON formatted response")
 				return
 			}
+			var buf bytes.Buffer
+			json.Indent(&buf, sessionJson, "", "  ")
 
 			// sessionJson is response
 			w.WriteHeader(http.StatusOK)
@@ -285,21 +291,35 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 			}
 
 			// All verified. Append to list of banned maps
+			log.Printf("Phase 1: \"%s\" banned \"%s\"", session.OrangeTeamToken, *mapChoice.Choice)
 			session.MapsBanned = append(session.MapsBanned, *mapChoice.Choice)
 			w.WriteHeader(http.StatusOK)
 			return
 		case "8":
 			// Phase 8 (results phase), mapban done
-			// Close session
-			token := r.URL.Query().Get("token")
-			if token == "" {
-				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprintln(w, "Malformed request -- expected token")
+			// Expects following document:
+			// {
+			// 		"token": "..."
+			// }
+
+			// Parse request
+			var req MapChoice
+			b := make([]byte, r.ContentLength)
+			r.Body.Read(b)
+			if err := json.Unmarshal(b, &req); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintln(w, "Cannot parse JSON request body")
 				return
 			}
 
+			// Check if token is included in request
+			if req.Token == nil {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintln(w, "Token missing")
+			}
+
 			// Look up token in session map
-			s, found := sessionMap[token]
+			s, found := sessionMap[*req.Token]
 			if !found {
 				w.WriteHeader(http.StatusBadRequest)
 				fmt.Fprintln(w, "Malformed request -- expected valid token")
@@ -308,7 +328,7 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 
 			// s found, could either be host, OT, or BT token
 			// OT or BT token
-			if s.HostToken != token {
+			if s.HostToken != *req.Token {
 				// Error -- only hosts can close sessions
 				w.WriteHeader(http.StatusForbidden)
 				fmt.Fprintln(w, "Not host -- closing not allowed")
@@ -324,6 +344,7 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 			delete(sessionMap, s.HostToken)
 
 			// Closing sessions successful
+			log.Printf("Closing session \"%s\"", s.HostToken)
 			// Return maps chosen
 			result, err := json.Marshal(mapsChosen)
 			if err != nil {
