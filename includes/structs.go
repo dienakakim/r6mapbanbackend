@@ -34,6 +34,9 @@ type Session struct {
 
 	// Follows the following format: [OT pick, BT pick, decider]
 	MapsChosen []string `json:"mapsChosen"`
+
+	// Tracks the current phase of the session
+	CurrentPhase int `json:"-"`
 }
 
 type MapChoice struct {

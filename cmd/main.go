@@ -226,7 +226,7 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 			// JSON decoded -- t contains TeamNames
 			// Create session
 			hostToken := generateToken()
-			s := Session{HostToken: hostToken, OrangeTeamToken: generateToken(), BlueTeamToken: generateToken(), OrangeTeamName: *initSession.OrangeTeamName, BlueTeamName: *initSession.BlueTeamName, MapPool: initSession.MapPool, MapsChosen: make([]string, 0, 7)}
+			s := Session{HostToken: hostToken, OrangeTeamToken: generateToken(), BlueTeamToken: generateToken(), OrangeTeamName: *initSession.OrangeTeamName, BlueTeamName: *initSession.BlueTeamName, MapPool: initSession.MapPool, MapsChosen: make([]string, 0, 7), CurrentPhase: 1}
 			sessionMap[hostToken] = s                                                                         // host
 			sessionMap[s.OrangeTeamToken] = Session{HostToken: hostToken, OrangeTeamToken: s.OrangeTeamToken} // orange team
 			sessionMap[s.BlueTeamToken] = Session{HostToken: hostToken, BlueTeamToken: s.BlueTeamToken}       // blue team
@@ -297,6 +297,13 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 			session = sessionMap[session.HostToken]
 
 			// Session from orange team confirmed
+			// Check if phase values from request and server session match
+			if phase != session.CurrentPhase {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, "Expected phase value to be %d, got %d\n", session.CurrentPhase, phase)
+				return
+			}
+
 			// Check if choice is duplicate
 			for _, m := range session.MapsChosen {
 				if m == *mapChoice.Choice {
@@ -332,6 +339,7 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(resp)
+			session.CurrentPhase++
 			sessionMap[session.HostToken] = session
 		case 2:
 			fallthrough
@@ -382,6 +390,13 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 			session = sessionMap[session.HostToken]
 
 			// Session from blue team confirmed
+			// Check if phase values from request and server session match
+			if phase != session.CurrentPhase {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, "Expected phase value to be %d, got %d\n", session.CurrentPhase, phase)
+				return
+			}
+
 			// Check if choice is duplicate
 			for _, m := range session.MapsChosen {
 				if m == *mapChoice.Choice {
@@ -417,6 +432,7 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(resp)
+			session.CurrentPhase++
 			sessionMap[session.HostToken] = session
 		case 7:
 			// Phase 7 -- Host decider
