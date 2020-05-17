@@ -33,9 +33,6 @@ type Session struct {
 
 	// Follows the following format: [OT pick, BT pick, decider]
 	MapsChosen []string `json:"mapsChosen"`
-
-	// Used during pick phases (phases 3, 4, and 7) to prevent being picked
-	MapsBanned []string `json:"mapsBanned"`
 }
 
 type MapChoice struct {
