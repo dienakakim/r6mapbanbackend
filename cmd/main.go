@@ -150,13 +150,20 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 		}
 
 		// Check for phase value
-		switch r.Header.Get("MapBan-Phase") {
-		case "":
-			// Phase not set
-			log.Println("Phase not set")
+		phase, err := strconv.Atoi(r.Header.Get("MapBan-Phase"))
+		if err != nil {
 			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprintln(w, "Phase not set")
-		case "0":
+			fmt.Fprintln(w, "Expected integer phase value, or phase not set")
+			return
+		}
+		var action string
+		if phase == 1 || phase == 2 || phase == 5 || phase == 6 {
+			action = "banned"
+		} else if phase == 3 || phase == 4 || phase == 7 {
+			action = "picked"
+		}
+		switch phase {
+		case 0:
 			// Phase 0
 			// Expected JSON body:
 			// {
@@ -235,16 +242,17 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 			}
 			var buf bytes.Buffer
 			json.Indent(&buf, sessionJson, "", "  ")
+			fmt.Fprintln(os.Stderr, buf.String())
 
 			// sessionJson is response
 			w.WriteHeader(http.StatusOK)
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(sessionJson)
-		case "1":
+		case 1:
 			fallthrough
-		case "3":
+		case 3:
 			fallthrough
-		case "5":
+		case 5:
 			// Phases 1, 3, 5 -- Orange Team ban/pick
 			// Expects token from an Orange Team
 			// {
@@ -286,8 +294,18 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 				fmt.Fprintln(w, "Not an orange team")
 				return
 			}
+			session = sessionMap[session.HostToken]
 
 			// Session from orange team confirmed
+			// Check if choice is duplicate
+			for _, m := range session.MapsChosen {
+				if m == *mapChoice.Choice {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprintln(w, "Duplicate map")
+					return
+				}
+			}
+
 			// Check if map banned is in host session's map pool
 			found = false
 			for _, m := range session.MapPool {
@@ -303,15 +321,23 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 			}
 
 			// All verified. Append to list of chosen maps
-			log.Printf("Phase 1: \"%s\" banned \"%s\"", session.OrangeTeamName, *mapChoice.Choice)
+			log.Printf("Phase %d: \"%s\" %s \"%s\"", phase, session.OrangeTeamName, action, *mapChoice.Choice)
 			session.MapsChosen = append(session.MapsChosen, *mapChoice.Choice)
-			w.WriteHeader(http.StatusOK)
-			return
-		case "2":
+			// Send MapsChosen as response
+			resp, err := json.Marshal(session.MapsChosen)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintln(w, "Cannot encode JSON response")
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(resp)
+			sessionMap[session.HostToken] = session
+		case 2:
 			fallthrough
-		case "4":
+		case 4:
 			fallthrough
-		case "6":
+		case 6:
 			// Phases 2, 4, 6 -- Blue Team ban/pick
 			// Expects token from a Blue Team, and non-duplicate choice
 			// {
@@ -353,6 +379,7 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 				fmt.Fprintln(w, "Not a blue team")
 				return
 			}
+			session = sessionMap[session.HostToken]
 
 			// Session from blue team confirmed
 			// Check if choice is duplicate
@@ -379,82 +406,103 @@ func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func
 			}
 
 			// All verified. Append to list of chosen maps
-			log.Printf("Phase 2: \"%s\" banned \"%s\"", session.BlueTeamName, *mapChoice.Choice)
+			log.Printf("Phase %d: \"%s\" %s \"%s\"", phase, session.BlueTeamName, action, *mapChoice.Choice)
 			session.MapsChosen = append(session.MapsChosen, *mapChoice.Choice)
-			w.WriteHeader(http.StatusOK)
-			return
-		case "7":
-			// Not implemented
-			w.WriteHeader(http.StatusNotImplemented)
-			return
-		case "8":
-			// Phase 8 (results phase), mapban done
-			// Expects following document:
-			// {
-			// 		"token": "..."
-			// }
-
-			// Parse request
-			var req MapChoice
-			b := make([]byte, r.ContentLength)
-			r.Body.Read(b)
-			if err := json.Unmarshal(b, &req); err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintln(w, "Cannot parse JSON request body")
-				return
-			}
-
-			// Check if token is included in request
-			if req.Token == nil {
-				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprintln(w, "Token missing")
-			}
-
-			// Look up token in session map
-			s, found := sessionMap[*req.Token]
-			if !found {
-				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprintln(w, "Malformed request -- expected valid token")
-				return
-			}
-
-			// s found, could either be host, OT, or BT token
-			// OT or BT token
-			if s.HostToken != *req.Token {
-				// Error -- only hosts can close sessions
-				w.WriteHeader(http.StatusForbidden)
-				fmt.Fprintln(w, "Not host -- closing not allowed")
-				return
-			}
-
-			// Get chosen maps
-			mapsChosen := s.MapsChosen
-
-			// Close host, OT, and BT sessions
-			delete(sessionMap, s.OrangeTeamToken)
-			delete(sessionMap, s.BlueTeamToken)
-			delete(sessionMap, s.HostToken)
-
-			// Closing sessions successful
-			log.Printf("Closing session \"%s\"", s.HostToken)
-			// Return maps chosen
-			result, err := json.Marshal(mapsChosen)
+			// Send MapsChosen as response
+			resp, err := json.Marshal(session.MapsChosen)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				fmt.Fprintln(w, "Cannot encode JSON response")
 				return
 			}
-
-			// Encoded successfully
-			w.WriteHeader(http.StatusOK)
 			w.Header().Set("Content-Type", "application/json")
-			w.Write(result)
-			return
-		default:
-			// Not implemented
-			w.WriteHeader(http.StatusNotImplemented)
-			fmt.Fprintln(w, "Will be handled soon")
+			w.Write(resp)
+			sessionMap[session.HostToken] = session
+		case 7:
+			// Phase 7 -- Host decider
+			// Expects token from the host, and non-duplicate choice
+			// {
+			// 		token: "...",
+			//		choice: "..."
+			// }
+			var mapChoice MapChoice
+			b := make([]byte, r.ContentLength)
+			r.Body.Read(b)
+			if err := json.Unmarshal(b, &mapChoice); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintln(w, "Cannot parse JSON request body")
+				return
+			}
+
+			// Check for nil fields
+			if mapChoice.Choice == nil || mapChoice.Token == nil {
+				w.WriteHeader(http.StatusBadRequest)
+				if mapChoice.Choice == nil {
+					fmt.Fprintln(w, "Map choice missing")
+				}
+				if mapChoice.Token == nil {
+					fmt.Fprintln(w, "Token missing")
+				}
+			}
+
+			// Check if token references active session
+			session, found := sessionMap[*mapChoice.Token]
+			if !found {
+				w.WriteHeader(http.StatusInternalServerError) // server fault since sessions must be preserved
+				fmt.Fprintln(w, "Session not found")
+				return
+			}
+
+			// Session found, check if it is a host session
+			if *mapChoice.Token != session.HostToken {
+				w.WriteHeader(http.StatusForbidden) // not blue team
+				fmt.Fprintln(w, "Not a blue team")
+				return
+			}
+			// `session` is already the host session
+
+			// Session from host confirmed
+			// Check if choice is duplicate
+			for _, m := range session.MapsChosen {
+				if m == *mapChoice.Choice {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprintln(w, "Duplicate map")
+					return
+				}
+			}
+
+			// Check if map chosen is in map pool
+			found = false
+			for _, m := range session.MapPool {
+				if m == *mapChoice.Choice {
+					found = true
+					break
+				}
+			}
+			if !found {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, "Map not found in host map pool: %s\n", *mapChoice.Choice)
+				return
+			}
+
+			// All verified. Append to list of chosen maps
+			log.Printf("Phase 7: Host %s \"%s\"", action, *mapChoice.Choice)
+			session.MapsChosen = append(session.MapsChosen, *mapChoice.Choice)
+			// Send 3 picked maps as response
+			finalMaps := []string{session.MapsChosen[2], session.MapsChosen[3], session.MapsChosen[6]}
+			resp, err := json.Marshal(finalMaps)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				fmt.Fprintln(w, "Cannot encode JSON response")
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(resp)
+			// Phase 7 is ending phase. Close host, OT, and BT sessions
+			delete(sessionMap, session.HostToken)
+			delete(sessionMap, session.OrangeTeamToken)
+			delete(sessionMap, session.BlueTeamToken)
+			log.Printf("Closed sessions \"%s\", \"%s\", and \"%s\". Picked maps are %v", session.HostToken, session.OrangeTeamToken, session.BlueTeamToken, string(resp))
 		}
 	}
-
 }

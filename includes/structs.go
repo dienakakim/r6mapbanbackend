@@ -7,7 +7,8 @@ type InitSession struct {
 	MapPool        []string `json:"mapPool"`
 }
 
-// Session represents a mapban session.
+// Session represents a mapban session. This implements the node
+// of a disjoint set.
 // JSON corresponding format:
 //
 //	{
