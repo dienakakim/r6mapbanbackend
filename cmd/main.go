@@ -136,6 +136,7 @@ func generateToken() string {
 	return base64.URLEncoding.Strict().EncodeToString(b[:])
 }
 
+// handlerBuilder facilitates passing the session map and game map pool to the HTTP handler.
 func handlerBuilder(sessionMap map[string]Session, mapPool map[string]bool) func(http.ResponseWriter, *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
